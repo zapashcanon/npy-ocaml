@@ -17,6 +17,7 @@ let dtype ~packed_kind =
     match packed_kind with
     | P Bigarray.Int32 -> "i4"
     | P Bigarray.Int64 -> "i8"
+    | P Bigarray.Float16 -> "f2"
     | P Bigarray.Float32 -> "f4"
     | P Bigarray.Float64 -> "f8"
     | P Bigarray.Int8_unsigned -> "u1"
@@ -34,16 +35,24 @@ let dtype ~packed_kind =
 let map_file file_descr ~pos kind layout shared shape =
   let is_scalar = Array.length shape = 0 in
   let array =
-    Unix.map_file file_descr ~pos kind layout shared (if is_scalar then [|1|] else shape)
+    Unix.map_file
+      file_descr
+      ~pos
+      kind
+      layout
+      shared
+      (if is_scalar then [| 1 |] else shape)
   in
   if is_scalar then Bigarray.reshape array [||] else array
 
 let fortran_order (type a) ~(layout : a Bigarray.layout) =
-  match layout with Bigarray.C_layout -> "False" | Bigarray.Fortran_layout -> "True"
+  match layout with
+  | Bigarray.C_layout -> "False"
+  | Bigarray.Fortran_layout -> "True"
 
 let shape ~dims =
   match dims with
-  | [|dim1|] -> Printf.sprintf "%d," dim1
+  | [| dim1 |] -> Printf.sprintf "%d," dim1
   | dims -> Array.to_list dims |> List.map string_of_int |> String.concat ", "
 
 let full_header ?header_len ~layout ~packed_kind ~dims () =
@@ -78,33 +87,34 @@ let with_file filename flags mask ~f =
     let result = f file_descr in
     Unix.close file_descr;
     result
-  with exn ->
+  with
+  | exn ->
     Unix.close file_descr;
     raise exn
 
 let write ?header_len bigarray filename =
-  with_file filename [O_CREAT; O_TRUNC; O_RDWR] 0o640 ~f:(fun file_descr ->
-      let full_header =
-        full_header
-          ()
-          ?header_len
-          ~layout:(Bigarray.Genarray.layout bigarray)
-          ~packed_kind:(P (Bigarray.Genarray.kind bigarray))
-          ~dims:(Bigarray.Genarray.dims bigarray)
-      in
-      let full_header_len = String.length full_header in
-      if Unix.write_substring file_descr full_header 0 full_header_len <> full_header_len
-      then raise Cannot_write;
-      let file_array =
-        map_file
-          ~pos:(Int64.of_int full_header_len)
-          file_descr
-          (Bigarray.Genarray.kind bigarray)
-          (Bigarray.Genarray.layout bigarray)
-          true
-          (Bigarray.Genarray.dims bigarray)
-      in
-      Bigarray.Genarray.blit bigarray file_array )
+  with_file filename [ O_CREAT; O_TRUNC; O_RDWR ] 0o640 ~f:(fun file_descr ->
+    let full_header =
+      full_header
+        ()
+        ?header_len
+        ~layout:(Bigarray.Genarray.layout bigarray)
+        ~packed_kind:(P (Bigarray.Genarray.kind bigarray))
+        ~dims:(Bigarray.Genarray.dims bigarray)
+    in
+    let full_header_len = String.length full_header in
+    if Unix.write_substring file_descr full_header 0 full_header_len <> full_header_len
+    then raise Cannot_write;
+    let file_array =
+      map_file
+        ~pos:(Int64.of_int full_header_len)
+        file_descr
+        (Bigarray.Genarray.kind bigarray)
+        (Bigarray.Genarray.layout bigarray)
+        true
+        (Bigarray.Genarray.dims bigarray)
+    in
+    Bigarray.Genarray.blit bigarray file_array)
 
 let write1 array1 filename = write (Bigarray.genarray_of_array1 array1) filename
 let write2 array2 filename = write (Bigarray.genarray_of_array2 array2) filename
@@ -116,7 +126,8 @@ module Batch_writer = struct
   type t =
     { file_descr : Unix.file_descr
     ; mutable bytes_written_so_far : int
-    ; mutable dims_and_packed_kind : (int array * packed_kind) option }
+    ; mutable dims_and_packed_kind : (int array * packed_kind) option
+    }
 
   let append t bigarray =
     let file_array =
@@ -150,8 +161,8 @@ module Batch_writer = struct
       dims.(0) <- dims.(0) + dims'.(0)
 
   let create filename =
-    let file_descr = Unix.openfile filename [O_CREAT; O_TRUNC; O_RDWR] 0o640 in
-    {file_descr; bytes_written_so_far = header_len; dims_and_packed_kind = None}
+    let file_descr = Unix.openfile filename [ O_CREAT; O_TRUNC; O_RDWR ] 0o640 in
+    { file_descr; bytes_written_so_far = header_len; dims_and_packed_kind = None }
 
   let close t =
     assert (Unix.lseek t.file_descr 0 SEEK_SET = 0);
@@ -184,7 +195,8 @@ module Header = struct
   type t =
     { kind : packed_kind
     ; fortran_order : bool
-    ; shape : int array }
+    ; shape : int array
+    }
 
   let split str ~on =
     let parens = ref 0 in
@@ -198,7 +210,7 @@ module Header = struct
     done;
     List.fold_left
       (fun (prev_p, acc) index ->
-        index, String.sub str (index + 1) (prev_p - index - 1) :: acc )
+         index, String.sub str (index + 1) (prev_p - index - 1) :: acc)
       (String.length str, [])
       !indexes
     |> fun (first_pos, acc) -> String.sub str 0 first_pos :: acc
@@ -223,29 +235,29 @@ module Header = struct
 
   let parse header =
     let header_fields =
-      trim header ~on:['{'; ' '; '}'; '\n']
+      trim header ~on:[ '{'; ' '; '}'; '\n' ]
       |> split ~on:','
       |> List.map String.trim
       |> List.filter (fun s -> String.length s > 0)
       |> List.map (fun header_field ->
-             match split header_field ~on:':' with
-             | [name; value] ->
-               trim name ~on:['\''; ' '], trim value ~on:['\''; ' '; '('; ')']
-             | _ -> read_error "unable to parse field %s" header_field )
+        match split header_field ~on:':' with
+        | [ name; value ] ->
+          trim name ~on:[ '\''; ' ' ], trim value ~on:[ '\''; ' '; '('; ')' ]
+        | _ -> read_error "unable to parse field %s" header_field)
     in
     let find_field field =
-      try List.assoc field header_fields with Not_found ->
-        read_error "cannot find field %s" field
+      try List.assoc field header_fields with
+      | Not_found -> read_error "cannot find field %s" field
     in
     let kind =
       let kind = find_field "descr" in
       (match kind.[0] with
-      | '|' | '=' -> ()
-      | '>' ->
-        if not Sys.big_endian then read_error "big endian data but arch is little endian"
-      | '<' ->
-        if Sys.big_endian then read_error "little endian data but arch is big endian"
-      | otherwise -> read_error "incorrect endianness %c" otherwise);
+       | '|' | '=' -> ()
+       | '>' ->
+         if not Sys.big_endian then read_error "big endian data but arch is little endian"
+       | '<' ->
+         if Sys.big_endian then read_error "little endian data but arch is big endian"
+       | otherwise -> read_error "incorrect endianness %c" otherwise);
       match String.sub kind 1 (String.length kind - 1) with
       | "f4" -> P Float32
       | "f8" -> P Float64
@@ -274,7 +286,7 @@ module Header = struct
       |> List.map int_of_string
       |> Array.of_list
     in
-    {kind; fortran_order; shape}
+    { kind; fortran_order; shape }
 end
 
 type packed_array = P : (_, _, _) Bigarray.Genarray.t -> packed_array
@@ -284,7 +296,7 @@ type packed_array3 = P3 : (_, _, _) Bigarray.Array3.t -> packed_array3
 
 let read_mmap filename ~shared =
   let access = if shared then Unix.O_RDWR else O_RDONLY in
-  let file_descr = Unix.openfile filename [access] 0 in
+  let file_descr = Unix.openfile filename [ access ] 0 in
   let pos, header =
     try
       let magic_string' = really_read file_descr magic_string_len in
@@ -307,7 +319,8 @@ let read_mmap filename ~shared =
       in
       let header = Header.parse header in
       Int64.of_int (header_len + header_len_len + magic_string_len + 2), header
-    with exn ->
+    with
+    | exn ->
       Unix.close file_descr;
       raise exn
   in
@@ -358,7 +371,11 @@ module Npz = struct
   let npy_suffix = ".npy"
 
   let maybe_add_suffix array_name ~suffix =
-    let suffix = match suffix with None -> npy_suffix | Some suffix -> suffix in
+    let suffix =
+      match suffix with
+      | None -> npy_suffix
+      | Some suffix -> suffix
+    in
     array_name ^ suffix
 
   type in_file = Zip.in_file
@@ -368,22 +385,22 @@ module Npz = struct
   let entries t =
     Zip.entries t
     |> List.map (fun entry ->
-           let filename = entry.Zip.filename in
-           if String.length filename < String.length npy_suffix
-           then filename
-           else
-             let start_pos = String.length filename - String.length npy_suffix in
-             if String.sub filename start_pos (String.length npy_suffix) = npy_suffix
-             then String.sub filename 0 start_pos
-             else filename )
+      let filename = entry.Zip.filename in
+      if String.length filename < String.length npy_suffix
+      then filename
+      else (
+        let start_pos = String.length filename - String.length npy_suffix in
+        if String.sub filename start_pos (String.length npy_suffix) = npy_suffix
+        then String.sub filename 0 start_pos
+        else filename))
 
   let close_in = Zip.close_in
 
   let read ?suffix t array_name =
     let array_name = maybe_add_suffix array_name ~suffix in
     let entry =
-      try Zip.find_entry t array_name with Not_found ->
-        raise (Invalid_argument ("unable to find " ^ array_name))
+      try Zip.find_entry t array_name with
+      | Not_found -> raise (Invalid_argument ("unable to find " ^ array_name))
     in
     let tmp_file = Filename.temp_file "ocaml-npz" ".tmp" in
     Zip.copy_entry_to_file t entry tmp_file;
@@ -413,9 +430,10 @@ module Eq = struct
 
   (** Type equalities for bigarray kinds *)
   module Kind = struct
-    let ( === ) : type a b c d.
-        (a, b) kind -> (c, d) kind -> ((a, b) kind, (c, d) kind) t option =
-     fun x y ->
+    let ( === )
+      : type a b c d. (a, b) kind -> (c, d) kind -> ((a, b) kind, (c, d) kind) t option
+      =
+      fun x y ->
       match x, y with
       | Float32, Float32 -> Some W
       | Float64, Float64 -> Some W
@@ -436,7 +454,7 @@ module Eq = struct
   (** Type equalities for layout *)
   module Layout = struct
     let ( === ) : type a b. a layout -> b layout -> (a layout, b layout) t option =
-     fun x y ->
+      fun x y ->
       match x, y with
       | Fortran_layout, Fortran_layout -> Some W
       | C_layout, C_layout -> Some W
@@ -447,37 +465,53 @@ end
 (** Conversion functions from packed arrays to bigarrays *)
 
 let to_bigarray
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P x) =
+      (type a b c)
+      (layout : c Bigarray.layout)
+      (kind : (a, b) Bigarray.kind)
+      (P x)
+  =
   match Eq.Layout.(Bigarray.Genarray.layout x === layout) with
   | None -> None
   | Some Eq.W ->
     (match Eq.Kind.(Bigarray.Genarray.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Genarray.t))
+     | None -> None
+     | Some Eq.W -> Some (x : (a, b, c) Bigarray.Genarray.t))
 
 let to_bigarray1
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P1 x) =
+      (type a b c)
+      (layout : c Bigarray.layout)
+      (kind : (a, b) Bigarray.kind)
+      (P1 x)
+  =
   match Eq.Layout.(Bigarray.Array1.layout x === layout) with
   | None -> None
   | Some Eq.W ->
     (match Eq.Kind.(Bigarray.Array1.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array1.t))
+     | None -> None
+     | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array1.t))
 
 let to_bigarray2
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P2 x) =
+      (type a b c)
+      (layout : c Bigarray.layout)
+      (kind : (a, b) Bigarray.kind)
+      (P2 x)
+  =
   match Eq.Layout.(Bigarray.Array2.layout x === layout) with
   | None -> None
   | Some Eq.W ->
     (match Eq.Kind.(Bigarray.Array2.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array2.t))
+     | None -> None
+     | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array2.t))
 
 let to_bigarray3
-    (type a b c) (layout : c Bigarray.layout) (kind : (a, b) Bigarray.kind) (P3 x) =
+      (type a b c)
+      (layout : c Bigarray.layout)
+      (kind : (a, b) Bigarray.kind)
+      (P3 x)
+  =
   match Eq.Layout.(Bigarray.Array3.layout x === layout) with
   | None -> None
   | Some Eq.W ->
     (match Eq.Kind.(Bigarray.Array3.kind x === kind) with
-    | None -> None
-    | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array3.t))
+     | None -> None
+     | Some Eq.W -> Some (x : (a, b, c) Bigarray.Array3.t))
